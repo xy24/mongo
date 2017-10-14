@@ -131,7 +131,7 @@ private:
         }
 
         AtomicUInt32 _refCount;
-        uint32_t _capacity;
+        uint64_t _capacity;
     };
 
     explicit SharedBuffer(Holder* holder) : _holder(holder, /*add_ref=*/false) {

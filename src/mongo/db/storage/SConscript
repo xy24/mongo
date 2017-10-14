@@ -229,3 +229,14 @@ env.CppUnitTest(
     LIBDEPS=[],
     LIBDEPS_PRIVATE=[],
 )
+
+env.Install(
+    '#/',
+    env.Program(
+        target='split_bson',
+        source='split_bson.cpp',
+        LIBDEPS=[
+            '$BUILD_DIR/mongo/base',
+        ]
+    )
+)
