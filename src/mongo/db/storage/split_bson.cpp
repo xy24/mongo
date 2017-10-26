@@ -37,6 +37,7 @@
 #include "mongo/bson/bsonobj.h"
 #include "mongo/util/hex.h"
 #include "mongo/util/log.h"
+#include "mongo/util/lru_cache.h"
 #include "mongo/util/shared_buffer.h"
 #include "mongo/util/string_map.h"
 #include "third_party/murmurhash3/MurmurHash3.h"
@@ -56,7 +57,7 @@ public:
         // by _done.
         _sb.skip(2 * sizeof(int32_t));
         // Reserve space for the EOO byte. This means _done() can't fail.
-        _sb.reserveBytes(1);
+        // _sb.reserveBytes(1);
     }
     void append(StringData fieldName, double val) {
         _sb.appendNum(static_cast<char>(NumberDouble));
@@ -95,10 +96,15 @@ public:
                 case NumberLong:
                     append(elem.fieldNameStringData(), elem._numberLong());
                     break;
-                case EOO:
+                case EOO: {
                     _sb.claimReservedBytes(1);
                     _sb.appendNum(static_cast<char>(EOO));
+                    uint32_t schemaSize = _sb.len();
+                    uint32_t fixedSize = _fb.len();
+                    memcmp(_sb.buf(), &schemaSize, sizeof(uint32_t));
+                    memcmp(_sb.buf() + sizeof(uint32_t), &fixedSize, sizeof(uint32_t));
                     return;
+                }
 
                 default:
                     std::string msg = str::stream() << "field " << elem.fieldNameStringData()
@@ -114,11 +120,13 @@ public:
 
     uint32_t hash() {
         uint32_t result;
+        invariant(_sb.buf()[_sb.len() - 1] == static_cast<char>(EOO));
         MurmurHash3_x86_32(_sb.buf(), _sb.len(), 0, &result);
         return result;
     }
 
     StringData schema() {
+        invariant(_sb.buf()[_sb.len() - 1] == static_cast<char>(EOO));
         return StringData(_sb.buf(), _sb.len());
     }
 
@@ -151,7 +159,10 @@ SharedBuffer readFile(std::string filename) {
 int splitBSON(int argc, const char* argv[]) {
     std::string fieldname = argv[1];
     std::string key = argv[2];
-    for (int j = 3; j < argc; j++) {
+    LRUCache<uint32_t, bool> cache(std::stoi(argv[3]));
+    std::vector<uint32_t> schemas;
+    int64_t misses = 0;
+    for (int j = 4; j < argc; j++) {
         std::string filename = argv[j];
         auto data = readFile(filename);
         log() << "starting search for docs where " << fieldname << " starts with " << key;
@@ -160,9 +171,9 @@ int splitBSON(int argc, const char* argv[]) {
         int docs = 0;
         int runs = 0;
         std::string::size_type pos = 0;
-        using SchemaMap = StringMap<int>;
+        using SchemaMap = StringMap<uint32_t>;
         SchemaMap schemaCount;
-        SchemaMap::iterator lastIt = schemaCount.end();
+        uint32_t lastHash = 0;
         while (pos + 4 < data.capacity()) {
             auto obj = BSONObj(data.get() + pos);
             BSONElement field = obj[fieldname];
@@ -170,24 +181,48 @@ int splitBSON(int argc, const char* argv[]) {
                 (field.type() == String && field.checkAndGetStringData().startsWith(key));
             SplitBSONBuilder builder;
             builder.appendElements(obj);
-            auto it = schemaCount.try_emplace(builder.schema()).first;
-            ++(it->second);
-            if (lastIt == it)
+            auto hash = builder.hash();
+            schemas.push_back(hash);
+            {
+                auto it = cache.find(hash);
+                if (it == cache.end()) {
+                    misses++;
+                    cache.add(hash, true);
+                }
+            }
+            auto p = schemaCount.try_emplace(builder.schema());
+            auto it = p.first;
+            if (p.second)
+                ++(it->second);
+            else
+                it->second = 0;
+            if (lastHash == hash)
                 runs++;
-            lastIt = it;
+            lastHash = hash;
             ++docs;
             pos += obj.objsize();
             invariant(pos <= data.capacity());
         }
-        for (auto elem : schemaCount) {
-            int count = elem.second;
-            log() << "schema count " << count;
+        {
+            std::ofstream ofs("schema-count");
+            for (auto elem : schemaCount) {
+                int count = elem.second;
+                ofs << "schema count " << count << "\n";
+            }
+        }
+        {
+            std::ofstream ofs("schema-trace");
+            for (auto elem : schemas) {
+                ofs << elem << "\n";
+            }
         }
 
         log() << filename << " has " << docs << " docs, " << occurrences << " of which have "
               << fieldname << " starting with " << key;
         log() << filename << " has " << runs
               << " cases where the schema is unchanged in sequential docs";
+        log() << filename << " had " << misses << " misses in cache of size " << cache.size()
+              << ": " << ((docs - misses) * 100 / docs) << "% hit rate";
     }
     return 0;
 }

@@ -28,10 +28,14 @@
 
 #include "mongo/platform/basic.h"
 
+#include <fstream>
 #include <iostream>
 #include <type_traits>
 #include <utility>
+#include <vector>
+#include <unordered_set>
 
+#include "mongo/platform/random.h"
 #include "mongo/stdx/type_traits.h"
 #include "mongo/unittest/unittest.h"
 #include "mongo/util/assert_util.h"
@@ -596,6 +600,42 @@ TEST(LRUCacheTest, CountTest) {
     assertEquals(cache.count(1), size_t(1));
     cache.erase(1);
     assertEquals(cache.count(1), size_t(0));
+}
+
+TEST(LRUCacheTest, HitRateTest) {
+    PseudoRandom a(0);
+    std::vector<uint32_t> sample;
+    {
+        std::ifstream ifs("schema-trace");
+        uint32_t item;
+        while (ifs >> item)
+            sample.push_back(item);
+    }
+
+    int lastMisses = INT_MAX;
+    for (int j = 1; j <= 20; j++) {
+        LRUCache<uint32_t, bool> cache(1 << j);
+        std::unordered_set<uint32_t> seen;
+        int misses = 0;
+        for (auto item : sample) {
+            if (seen.count(item)) {
+            auto it = cache.find(item);
+            if (it == cache.end()) {
+                cache.add(item, true);
+                misses++;
+            } }
+            else {
+                misses++;
+                seen.insert(item);
+            }
+        }
+        unittest::log() << "cache size " << cache.size() << " has " << misses
+                        << " misses: " << ((sample.size() - misses) * 100 / sample.size())
+                        << "% hit rate";
+        invariant(misses <= lastMisses);
+        if (misses == lastMisses || misses == 0) break;
+        lastMisses = misses;
+    }
 }
 
 }  // namespace
