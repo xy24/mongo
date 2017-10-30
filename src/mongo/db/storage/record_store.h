@@ -270,6 +270,13 @@ public:
     }
 };
 
+class SchemaRecordCursor : public SeekableRecordCursor {
+public:
+    virtual const char* getField(size_t fieldIdx) const = 0;
+    virtual BSONType getType(size_t fieldIdx) const = 0;
+    virtual int getSize(size_t fieldIdx) const = 0;
+};
+
 /**
  * A RecordStore provides an abstraction used for storing documents in a collection,
  * or entries in an index. In storage engines implementing the KVEngine, record stores
@@ -476,6 +483,11 @@ public:
      */
     virtual std::unique_ptr<SeekableRecordCursor> getCursor(OperationContext* opCtx,
                                                             bool forward = true) const = 0;
+
+    virtual std::unique_ptr<SchemaRecordCursor> getSchemaCursor(OperationContext* opCtx,
+                                                                bool forward = true) const {
+        invariant(false);
+    };
 
     /**
      * Constructs a cursor over a potentially corrupted store, which can be used to salvage

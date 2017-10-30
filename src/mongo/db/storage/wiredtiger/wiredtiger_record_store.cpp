@@ -2017,6 +2017,69 @@ void WiredTigerRecordStorePrefixedCursor::initCursorToBeginning() {
     }
 }
 
+//==============================================================================================
+// Schema Cursor
+
+WiredTigerRecordStoreSchemaCursor::WiredTigerRecordStoreSchemaCursor(
+    OperationContext* opCtx, const WiredTigerRecordStore& rs, const std::vector<std::string>& fields, bool forward)
+    : _cursor(opCtx, rs, forward), _fields(fields) {}
+
+boost::optional<Record> WiredTigerRecordStoreSchemaCursor::next() {
+    _currentRecord = _cursor.next();
+    return _currentRecord;
+}
+
+void WiredTigerRecordStoreSchemaCursor::save() {
+    _cursor.save();
+}
+
+bool WiredTigerRecordStoreSchemaCursor::restore() {
+    return _cursor.restore();
+}
+
+void WiredTigerRecordStoreSchemaCursor::detachFromOperationContext() {
+    _cursor.detachFromOperationContext();
+}
+
+void WiredTigerRecordStoreSchemaCursor::reattachToOperationContext(OperationContext* opCtx) {
+    _cursor.reattachToOperationContext(opCtx);
+}
+
+boost::optional<Record> WiredTigerRecordStoreSchemaCursor::seekExact(const RecordId& id) {
+    return _cursor.seekExact(id);
+}
+
+void WiredTigerRecordStoreSchemaCursor::saveUnpositioned() {
+    _cursor.saveUnpositioned();
+}
+
+const char* WiredTigerRecordStoreSchemaCursor::getField(size_t fieldIdx) const {
+    auto fieldName = _fields[fieldIdx];
+    if (_currentRecord) {
+        return _currentRecord->data.toBson().getField(fieldName).value();
+    }
+    invariant(false);
+}
+
+BSONType WiredTigerRecordStoreSchemaCursor::getType(size_t fieldIdx) const {
+    auto fieldName = _fields[fieldIdx];
+    if (_currentRecord) {
+        return _currentRecord->data.toBson().getField(fieldName).type();
+    }
+    invariant(false);
+}
+
+int WiredTigerRecordStoreSchemaCursor::getSize(size_t fieldIdx) const {
+    auto fieldName = _fields[fieldIdx];
+    if (_currentRecord) {
+        return _currentRecord->data.toBson().getField(fieldName).size();
+    }
+    invariant(false);
+}
+
+// Schema Cursor
+//==============================================================================================
+
 Status WiredTigerRecordStore::updateCappedSize(OperationContext* opCtx, long long cappedSize) {
     if (_cappedMaxSize == cappedSize) {
         return Status::OK();

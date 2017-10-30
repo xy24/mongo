@@ -479,6 +479,38 @@ private:
     KVPrefix _prefix;
 };
 
+class WiredTigerRecordStoreSchemaCursor final : public SchemaRecordCursor {
+public:
+    WiredTigerRecordStoreSchemaCursor(OperationContext* opCtx,
+                                      const WiredTigerRecordStore& rs,
+                                      const std::vector<std::string>& fields,
+                                      bool forward = true);
+
+    boost::optional<Record> next();
+
+    boost::optional<Record> seekExact(const RecordId& id);
+
+    void save();
+
+    void saveUnpositioned();
+
+    bool restore();
+
+    void detachFromOperationContext();
+
+    void reattachToOperationContext(OperationContext* opCtx);
+
+    const char* getField(size_t fieldIdx) const;
+
+    BSONType getType(size_t fieldIdx) const;
+
+    int getSize(size_t fieldIdx) const;
+
+private:
+    WiredTigerRecordStoreStandardCursor _cursor;
+    std::vector<std::string> _fields;
+    boost::optional<Record> _currentRecord;
+};
 
 // WT failpoint to throw write conflict exceptions randomly
 MONGO_FP_FORWARD_DECLARE(WTWriteConflictException);
