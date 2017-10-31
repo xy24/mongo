@@ -2081,7 +2081,7 @@ BSONType WiredTigerRecordStoreSchemaCursor::getType(size_t fieldIdx) const {
 int WiredTigerRecordStoreSchemaCursor::getSize(size_t fieldIdx) const {
     auto fieldName = _fields[fieldIdx];
     if (_currentRecord) {
-        return _currentRecord->data.toBson().getField(fieldName).size();
+        return _currentRecord->data.toBson().getField(fieldName).valuesize();
     }
     invariant(false);
 }

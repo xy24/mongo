@@ -288,9 +288,14 @@ TEST(WiredTigerRecordStoreTest, SchemaCursorTest) {
 
     for (int i = 0; i < 3; i++) {
         ASSERT(cursor->next());
-        std::cout << "Cursor obj type is " << cursor->getType(0) << std::endl;
         int val = ConstDataView(cursor->getField(0)).read<LittleEndian<int>>();
-        std::cout << "Val is " << val << std::endl;
+        val = ConstDataView(cursor->getField(1)).read<LittleEndian<int>>();
+        ASSERT_TRUE(val == i * 3);
+        ASSERT_TRUE(cursor->getSize(0) == 4);
+        ASSERT_TRUE(cursor->getSize(1) == 4);
+
+        ASSERT_TRUE(cursor->getType(0) == NumberInt);
+        ASSERT_TRUE(cursor->getType(1) == NumberInt);
     }
     ASSERT(!cursor->next());
 }
