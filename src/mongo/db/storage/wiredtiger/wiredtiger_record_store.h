@@ -435,6 +435,7 @@ private:
 };
 
 class WiredTigerRecordStoreStandardCursor final : public WiredTigerRecordStoreCursorBase {
+    friend class WiredTigerRecordStoreSchemaCursor;
 public:
     WiredTigerRecordStoreStandardCursor(OperationContext* opCtx,
                                         const WiredTigerRecordStore& rs,

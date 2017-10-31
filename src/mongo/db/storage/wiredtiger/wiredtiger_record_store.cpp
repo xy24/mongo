@@ -1860,14 +1860,22 @@ std::unique_ptr<SeekableRecordCursor> StandardWiredTigerRecordStore::getCursor(
         wru->setIsOplogReader();
     }
 
-    return stdx::make_unique<WiredTigerRecordStoreStandardCursor>(opCtx, *this, forward);
+    log() << "yxy : Collection is " << this->ns();
+    if (this->ns() == "test.yxy") {
+        log() << "yxy : Returning Schema Cursor";
+        auto fields = std::initializer_list<std::string>({"a", "c"});
+        return stdx::make_unique<WiredTigerRecordStoreSchemaCursor>(opCtx, *this, fields, forward);
+    } else {
+        log() << "yxy : Returning Standard Cursor";
+        return stdx::make_unique<WiredTigerRecordStoreStandardCursor>(opCtx, *this, forward);
+    }
 }
 
 std::unique_ptr<SchemaRecordCursor> StandardWiredTigerRecordStore::getSchemaCursor(
     OperationContext* opCtx,
     const std::vector<std::string>& fields,
     bool forward) const {
-    log() << "Creating schema cursor";
+    log() << "yxy : Creating schema cursor";
     return stdx::make_unique<WiredTigerRecordStoreSchemaCursor>(opCtx, *this, fields, forward);
 }
 
@@ -2035,6 +2043,16 @@ WiredTigerRecordStoreSchemaCursor::WiredTigerRecordStoreSchemaCursor(
 
 boost::optional<Record> WiredTigerRecordStoreSchemaCursor::next() {
     _currentRecord = _cursor.next();
+    if (!_currentRecord)
+        return _currentRecord;
+
+    WT_CURSOR* c = _cursor._cursor->get();
+    RecordId id = _cursor.getKey(c);
+
+    if (id.repr() > 4) {
+        return {};
+    }
+
     return _currentRecord;
 }
 
