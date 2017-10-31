@@ -1863,6 +1863,15 @@ std::unique_ptr<SeekableRecordCursor> StandardWiredTigerRecordStore::getCursor(
     return stdx::make_unique<WiredTigerRecordStoreStandardCursor>(opCtx, *this, forward);
 }
 
+std::unique_ptr<SchemaRecordCursor> StandardWiredTigerRecordStore::getSchemaCursor(
+    OperationContext* opCtx,
+    const std::vector<std::string>& fields,
+    bool forward) const {
+    log() << "Creating schema cursor";
+    return stdx::make_unique<WiredTigerRecordStoreSchemaCursor>(opCtx, *this, fields, forward);
+}
+
+
 std::unique_ptr<RecordCursor> StandardWiredTigerRecordStore::getRandomCursorWithOptions(
     OperationContext* opCtx, StringData extraConfig) const {
     return stdx::make_unique<RandomCursor>(opCtx, *this, extraConfig);

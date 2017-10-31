@@ -343,6 +343,11 @@ public:
     virtual std::unique_ptr<SeekableRecordCursor> getCursor(OperationContext* opCtx,
                                                             bool forward) const override;
 
+    virtual std::unique_ptr<SchemaRecordCursor> getSchemaCursor(OperationContext* opCtx,
+                                                                const std::vector<std::string>& fields,
+                                                                bool forward) const override;
+
+
     virtual std::unique_ptr<RecordCursor> getRandomCursorWithOptions(
         OperationContext* opCtx, StringData extraConfig) const override;
 

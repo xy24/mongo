@@ -29,11 +29,14 @@
 #include "mongo/platform/basic.h"
 
 #include <memory>
+#include <iostream>
 #include <sstream>
 #include <string>
 #include <time.h>
 
 #include "mongo/base/checked_cast.h"
+#include "mongo/base/data_type_endian.h"
+#include "mongo/base/data_view.h"
 #include "mongo/base/init.h"
 #include "mongo/base/string_data.h"
 #include "mongo/bson/bsonobjbuilder.h"
@@ -260,6 +263,38 @@ TEST(WiredTigerRecordStoreTest, CappedCursorRollover) {
     ASSERT_FALSE(cursor->restore());
     ASSERT(!cursor->next());
 }
+
+TEST(WiredTigerRecordStoreTest, SchemaCursorTest) {
+    unique_ptr<RecordStoreHarnessHelper> harnessHelper(newRecordStoreHarnessHelper());
+    unique_ptr<RecordStore> rs(harnessHelper->newNonCappedRecordStore("a.b"));
+
+    {  // first insert 3 documents
+        ServiceContext::UniqueOperationContext opCtx(harnessHelper->newOperationContext());
+        for (int i = 0; i < 3; ++i) {
+            WriteUnitOfWork uow(opCtx.get());
+            stringstream ss;
+            ss << "{a: " << i << ", b: " << i * 2 << ", c: " << i * 3 << "}";
+            BSONObj spec = fromjson(ss.str());
+            StatusWith<RecordId> res = rs->insertRecord(opCtx.get(), spec.objdata(), spec.objsize(),
+                                                        Timestamp(), false);
+            ASSERT_OK(res.getStatus());
+            uow.commit();
+        }
+    }
+
+    auto client2 = harnessHelper->serviceContext()->makeClient("c2");
+    auto cursorCtx = harnessHelper->newOperationContext(client2.get());
+    auto cursor = rs->getSchemaCursor(cursorCtx.get(), {"a", "c"});
+
+    for (int i = 0; i < 3; i++) {
+        ASSERT(cursor->next());
+        std::cout << "Cursor obj type is " << cursor->getType(0) << std::endl;
+        int val = ConstDataView(cursor->getField(0)).read<LittleEndian<int>>();
+        std::cout << "Val is " << val << std::endl;
+    }
+    ASSERT(!cursor->next());
+}
+
 
 RecordId _oplogOrderInsertOplog(OperationContext* opCtx,
                                 const unique_ptr<RecordStore>& rs,

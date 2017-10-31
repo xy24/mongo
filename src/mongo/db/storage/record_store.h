@@ -485,6 +485,7 @@ public:
                                                             bool forward = true) const = 0;
 
     virtual std::unique_ptr<SchemaRecordCursor> getSchemaCursor(OperationContext* opCtx,
+                                                                const std::vector<std::string>& fields,
                                                                 bool forward = true) const {
         invariant(false);
     };
