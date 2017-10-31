@@ -33,8 +33,11 @@
 
 #include <fstream>
 
+#include "mongo/base/string_data.h"
 #include "mongo/bson/bsonelement.h"
 #include "mongo/bson/bsonobj.h"
+#include "mongo/bson/bsonobjbuilder.h"
+#include "mongo/unittest/bson_test_util.h"
 #include "mongo/util/hex.h"
 #include "mongo/util/log.h"
 #include "mongo/util/lru_cache.h"
@@ -43,6 +46,92 @@
 #include "third_party/murmurhash3/MurmurHash3.h"
 
 namespace mongo {
+class SchemaElement {
+public:
+    SchemaElement(const char* data) : _data(data){};
+    BSONType type() const {
+        const signed char typeByte = ConstDataView(_data).read<signed char>();
+        return static_cast<BSONType>(typeByte);
+    }
+    bool eoo() const {
+        return type() == EOO;
+    }
+    const StringData fieldName() const {
+        if (type() == EOO)
+            return {};
+
+        size_t len = 0;
+        const char* it = _data + 1;
+        do {
+            len = (len << 7) + (*it & 0x7f);
+        } while (*it++ & ~0x7f);
+
+        return StringData(it, len);
+    }
+
+    const char* rawdata() const {
+        return _data;
+    }
+    int fixedSize() const {
+        int size = 0;
+        switch (type()) {
+            case EOO:
+            case Undefined:
+            case jstNULL:
+            case MaxKey:
+            case MinKey:
+                break;
+            case mongo::Bool:
+                size = 1;
+                break;
+            case NumberInt:
+                size = 4;
+                break;
+            case bsonTimestamp:
+            case mongo::Date:
+            case NumberDouble:
+            case NumberLong:
+                size = 8;
+                break;
+            case NumberDecimal:
+                size = 16;
+                break;
+            case jstOID:
+                size = OID::kOIDSize;
+                break;
+            case Symbol:
+            case Code:
+            case mongo::String:
+                size = 4;
+                break;
+            case DBRef:
+                size = 4 + 12;
+                break;
+            case CodeWScope:
+            case Object:
+            case mongo::Array:
+                invariant("not implemented yet");
+                break;
+            case BinData:
+                size = 4 + 1 /*subtype*/;
+                break;
+            case RegEx:
+                size = 4;
+                break;
+            default: {
+                StringBuilder ss;
+                ss << "SchemaElement: bad type " << (int)type();
+                std::string msg = ss.str();
+                uasserted(ErrorCodes::UnsupportedFormat, msg.c_str());
+            }
+        }
+        return size;
+    }
+
+private:
+    const char* _data;
+};
+
 class SplitBSONBuilder {
 
 public:
@@ -53,58 +142,51 @@ public:
           _fixed(initFixedSize),
           _vb(_var),
           _var(initVarSize) {
-        // Skip over space for the schema length and the fixed length, which are filled in
-        // by _done.
+        // Skip over space for the schema length, the fixed data length and the variable data
+        // length, which are filled in by _done().
         _sb.skip(2 * sizeof(int32_t));
+        _fb.skip(sizeof(int32_t));
         // Reserve space for the EOO byte. This means _done() can't fail.
         // _sb.reserveBytes(1);
     }
-    void append(StringData fieldName, double val) {
-        _sb.appendNum(static_cast<char>(NumberDouble));
-        _sb.appendStr(fieldName);
-        _fb.appendNum(val);
+    void appendFieldName(StringData fieldName) {
+        size_t len = fieldName.size();
+        do {
+            _sb.appendNum(static_cast<char>(len % 0x80));
+            len /= 0x80;
+        } while (len);
+        _sb.appendStr(fieldName, /*includeEOO*/ false);
     }
-    void append(StringData fieldName, int val) {
-        _sb.appendNum(static_cast<char>(NumberInt));
-        _sb.appendStr(fieldName);
-        _fb.appendNum(val);
-    }
-    void append(StringData fieldName, long long val) {
-        _sb.appendNum(static_cast<char>(NumberLong));
-        _sb.appendStr(fieldName);
-        _fb.appendNum(val);
-    }
-    void append(StringData fieldName, StringData val) {
-        _sb.appendNum(static_cast<char>(String));
-        _sb.appendStr(fieldName);
-        _vb.appendStr(val, /*includeEOO*/ false);
-        _fb.appendNum(_vb.len());
-    }
+
     void appendElements(const BSONObj& x) {
         for (const BSONElement& elem : x) {
             switch (elem.type()) {
+                /* Fixed size data types */
                 case NumberDouble:
-                    append(elem.fieldNameStringData(), elem._numberDouble());
+                case jstOID:
+                case Bool:
+                case NumberInt:
+                case Date:
+                case jstNULL:
+                case bsonTimestamp:
+                case NumberLong:
+                case NumberDecimal:
+                    _sb.appendChar(*elem.rawdata());
+                    appendFieldName(elem.fieldNameStringData());
+                    _fb.appendBuf(elem.value(), elem.valuesize());
                     break;
                 case String:
-                    append(elem.fieldNameStringData(), elem.valueStringData());
+                    _sb.appendNum(static_cast<char>(String));
+                    appendFieldName(elem.fieldNameStringData());
+                    _vb.appendBuf(elem.valuestr(),
+                                  elem.valuestrsize());  // includes terminating null
+                    _fb.appendNum(endian::nativeToLittle(_vb.len()));
                     break;
-                case jstOID:
-                case NumberInt:
-                    append(elem.fieldNameStringData(), elem._numberInt());
-                    break;
-                case NumberLong:
-                    append(elem.fieldNameStringData(), elem._numberLong());
-                    break;
-                case EOO: {
-                    _sb.claimReservedBytes(1);
-                    _sb.appendNum(static_cast<char>(EOO));
-                    uint32_t schemaSize = _sb.len();
-                    uint32_t fixedSize = _fb.len();
-                    memcmp(_sb.buf(), &schemaSize, sizeof(uint32_t));
-                    memcmp(_sb.buf() + sizeof(uint32_t), &fixedSize, sizeof(uint32_t));
+
+                case EOO:
+                    // _sb.claimReservedBytes(1);
+                    _done();
                     return;
-                }
 
                 default:
                     std::string msg = str::stream() << "field " << elem.fieldNameStringData()
@@ -114,6 +196,7 @@ public:
                     uasserted(ErrorCodes::UnsupportedFormat, msg);
             }
         }
+        _done();
         LOG(1) << x.objsize() << " BSON bytes => " << _sb.len() << " schema + " << _fb.len()
                << " fixed + " << _vb.len() << " variable length bytes";
     }
@@ -130,7 +213,111 @@ public:
         return StringData(_sb.buf(), _sb.len());
     }
 
+    void toBSON(BufBuilder* builder, int s_ofs = 0, int f_ofs = 0, int v_ofs = 0) {
+        builder->skip(sizeof(int32_t));
+
+        // Read schema length and set up pointers to current and end positions in schema.
+        const char* s_ptr = _sb.buf() + s_ofs;
+        int s_len = ConstDataView(s_ptr).read<LittleEndian<int>>();
+        s_ptr += sizeof(int);
+        invariant(s_len <= _sb.len() - s_ofs);
+        const char* s_end = s_ptr + s_len;
+
+        // Read fixed data length and set up pointers.
+        invariant(_fb.len() >= f_ofs);
+        const char* f_ptr = _fb.buf() + f_ofs;
+        int f_len = ConstDataView(s_ptr).read<LittleEndian<int>>();
+        s_ptr += sizeof(int);
+        invariant(f_len <= _fb.len() - f_ofs);
+        const char* f_end = f_ptr + f_len;
+
+        // Read variable data length and set up pointers.
+        const char* v_ptr = _vb.buf() + v_ofs;
+        int v_len = ConstDataView(f_ptr).read<LittleEndian<int>>();
+        f_ptr += sizeof(int);
+        invariant(v_len <= _vb.len() - v_ofs);
+        const char* v_end = v_ptr + v_len;
+
+        while (s_ptr < s_end && *s_ptr) {
+            SchemaElement s_elem(s_ptr);
+            switch (s_elem.type()) {
+                case NumberDouble:
+                case jstOID:
+                case Bool:
+                case NumberInt:
+                case Date:
+                case jstNULL:
+                case bsonTimestamp:
+                case NumberLong:
+                case NumberDecimal: {
+                    builder->appendChar(*s_ptr);
+                    StringData fieldName = s_elem.fieldName();
+                    int fixedSize = s_elem.fixedSize();
+                    invariant(f_ptr + fixedSize <= f_end);
+                    builder->appendStr(fieldName, /*includeEOO*/ true);
+                    builder->appendBuf(f_ptr, fixedSize);
+
+                    s_ptr = fieldName.end();
+                    f_ptr += fixedSize;
+                    invariant(s_ptr <= s_end);
+                    break;
+                }
+                case String: {
+                    // Append type byte and fieldName.
+                    builder->appendChar(*s_ptr);
+                    StringData fieldName = s_elem.fieldName();
+                    builder->appendStr(fieldName, /*includeEOO*/ true);
+
+                    // Append string size.
+                    const int fixedSize = sizeof(int);
+                    invariant(f_ptr + fixedSize <= f_end);
+                    const int varSize =
+                        _vb.buf() + ConstDataView(f_ptr).read<LittleEndian<int>>() - v_ptr;
+                    builder->appendBuf(f_ptr, fixedSize);
+
+                    // Append actual string (which includes its terminating null character).
+                    invariant(v_ptr + varSize <= v_end);
+                    builder->appendBuf(v_ptr, varSize);
+                    s_ptr = fieldName.end();
+                    f_ptr += fixedSize;
+                    v_ptr += varSize;
+                    invariant(s_ptr <= s_end);
+
+                    break;
+                }
+                default:
+                    std::string msg = str::stream() << "field " << s_elem.fieldName()
+                                                    << " has unsupported type "
+                                                    << typeName(s_elem.type());
+                    log() << msg;
+                    uasserted(ErrorCodes::UnsupportedFormat, msg);
+            }
+        }
+        builder->appendChar(EOO);
+        DataView(builder->buf()).write(tagLittleEndian(builder->len()));
+    }
+
+    BSONObj obj() {
+        BufBuilder builder;
+        toBSON(&builder);
+        BSONObj out = BSONObj(builder.buf());
+        out.shareOwnershipWith(builder.release());
+        return out;
+    }
+
 private:
+    void _done() {
+        if (_sb.len() && _sb.buf()[_sb.len() - 1] == EOO)
+            return;
+        _sb.appendNum(static_cast<char>(EOO));
+        uint32_t schemaSize = endian::nativeToLittle(_sb.len());
+        uint32_t fixedSize = endian::nativeToLittle(_fb.len());
+        memcpy(_sb.buf(), &schemaSize, sizeof(uint32_t));
+        memcpy(_sb.buf() + sizeof(uint32_t), &fixedSize, sizeof(uint32_t));
+        uint32_t variableSize = endian::nativeToLittle(_vb.len());
+        memcpy(_fb.buf(), &variableSize, sizeof(uint32_t));
+    }
+
     BufBuilder& _sb;
     BufBuilder _schema;
     BufBuilder& _fb;
@@ -181,6 +368,10 @@ int splitBSON(int argc, const char* argv[]) {
                 (field.type() == String && field.checkAndGetStringData().startsWith(key));
             SplitBSONBuilder builder;
             builder.appendElements(obj);
+            BSONObj splitObj = builder.obj();
+            uassert(ErrorCodes::BadValue,
+                    str::stream() << obj << " != " << splitObj,
+                    obj.objsize() == splitObj.objsize());
             auto hash = builder.hash();
             schemas.push_back(hash);
             {
