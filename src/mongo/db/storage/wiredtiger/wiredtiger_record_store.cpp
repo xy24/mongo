@@ -63,6 +63,8 @@
 #include "mongo/util/scopeguard.h"
 #include "mongo/util/time_support.h"
 
+#include <bitset>
+
 namespace mongo {
 
 using std::unique_ptr;
@@ -259,6 +261,12 @@ public:
         return StringData(_sb.buf(), _sb.len());
     }
 
+    StringData dataPortion() {
+        // In end(), we append _vb to _fb, so _fb contains
+        // both chunks
+        return StringData(_fb.buf(), _fb.len());
+    }
+
     void toBSON(BufBuilder* builder, int s_ofs = 0, int f_ofs = 0, int v_ofs = 0) {
         builder->skip(sizeof(int32_t));
 
@@ -362,6 +370,9 @@ private:
         memcpy(_sb.buf() + sizeof(uint32_t), &fixedSize, sizeof(uint32_t));
         uint32_t variableSize = endian::nativeToLittle(_vb.len());
         memcpy(_fb.buf(), &variableSize, sizeof(uint32_t));
+
+        // Apppend the _vb portion to the _fb portion
+        _fb.appendBuf(_vb.buf(), _vb.len());
     }
 
     BufBuilder& _sb;
@@ -373,7 +384,7 @@ private:
 };
 
 // END SPLIT BSON STUFF
-    
+
 class WiredTigerRecordStore::OplogStones::InsertChange final : public RecoveryUnit::Change {
 public:
     InsertChange(OplogStones* oplogStones,
@@ -1383,6 +1394,8 @@ Status WiredTigerRecordStore::_insertRecords(OperationContext* opCtx,
                                              Record* records,
                                              const Timestamp* timestamps,
                                              size_t nRecords) {
+    log() << "In _insertRecords() for " << nRecords << " records";
+
     // We are kind of cheating on capped collections since we write all of them at once ....
     // Simplest way out would be to just block vector writes for everything except oplog ?
     int64_t totalLength = 0;
@@ -1432,12 +1445,75 @@ Status WiredTigerRecordStore::_insertRecords(OperationContext* opCtx,
             LOG(4) << "inserting record with timestamp " << ts.asULL();
             fassertStatusOK(39001, opCtx->recoveryUnit()->setTimestamp(SnapshotName(ts)));
         }
-        setKey(c, record.id);
-        WiredTigerItem value(record.data.data(), record.data.size());
-        c->set_value(c, value.Get());
-        int ret = WT_OP_CHECK(c->insert(c));
-        if (ret)
-            return wtRCToStatus(ret, "WiredTigerRecordStore::insertRecord");
+
+        if (this->ns() == "test.yxy") {
+            log() << "In special insert case";
+
+            // TODO:
+            // step 1 turn record.data into bson document
+            BSONObj data = record.data.toBson();
+            // step 2 split bson document
+            SplitBSONBuilder splitBuilder;
+            splitBuilder.appendElements(data);
+            const uint32_t schemaHash = splitBuilder.hash();
+            // step 3 insert schema
+            {
+                RecordData data(splitBuilder.schema().rawData(), splitBuilder.schema().size());
+                RecordId id(schemaHash, 0);
+                Record recToInsert = {id, data};
+
+                // FIXME: For now we're ignoring hash collisions
+                // We're also just re-inserting the schema every time, which is probably not so good.
+                // This is a MAJOR hack.
+                setKey(c, recToInsert.id);
+                WiredTigerItem value(recToInsert.data.data(), recToInsert.data.size());
+                c->set_value(c, value.Get());
+                int ret = WT_OP_CHECK(c->insert(c));
+                if (ret) {
+                    log() << "Failed to insert schema document";
+                    return wtRCToStatus(ret, "WiredTigerRecordStore::insertRecord");
+                }
+
+                log() << "Inserted schema with ID: " << std::bitset<64>(id.repr()).to_string();
+            }
+
+            // step 4 insert data
+            {
+                // FIXME: A correct version of this would maintain a counter for each
+                // schema Id. We're just going to use the global counter since we'll only insert a
+                // handful of documents
+                // FIXME: for now store the bson object as the value
+                RecordData data(record.data.data(), record.data.size());
+                //RecordData data(splitBuilder.dataPortion().rawData(), splitBuilder.dataPortion().size());
+                // FIXME: Here we use record.id, but to be safe we should really use an internal counter.
+                invariant(record.id.isNormal());
+                RecordId id(schemaHash, static_cast<uint32_t>(record.id.repr()));
+                Record recToInsert = {id, data};
+
+                setKey(c, recToInsert.id);
+                WiredTigerItem value(recToInsert.data.data(), recToInsert.data.size());
+                c->set_value(c, value.Get());
+                int ret = WT_OP_CHECK(c->insert(c));
+                if (ret) {
+                    log() << "Failed to insert schema document";
+                    return wtRCToStatus(ret, "WiredTigerRecordStore::insertRecord");
+                }
+
+                log() << "Schema hash is " << std::bitset<32>(schemaHash).to_string();
+                log() << "Inserting data with ID: " << std::bitset<64>(id.repr()).to_string()
+                      << " (record ID was " << std::bitset<64>(record.id.repr()).to_string() << ")";
+            }
+
+
+        } else {
+            log() << "In normal insert case for ns: " << this->ns();
+            setKey(c, record.id);
+            WiredTigerItem value(record.data.data(), record.data.size());
+            c->set_value(c, value.Get());
+            int ret = WT_OP_CHECK(c->insert(c));
+            if (ret)
+                return wtRCToStatus(ret, "WiredTigerRecordStore::insertRecord");
+        }
     }
 
     _changeNumRecords(opCtx, nRecords);
@@ -2327,16 +2403,24 @@ WiredTigerRecordStoreSchemaCursor::WiredTigerRecordStoreSchemaCursor(
     : _cursor(opCtx, rs, forward), _fields(fields) {}
 
 boost::optional<Record> WiredTigerRecordStoreSchemaCursor::next() {
-    _currentRecord = _cursor.next();
-    if (!_currentRecord)
-        return _currentRecord;
 
-    WT_CURSOR* c = _cursor._cursor->get();
-    RecordId id = _cursor.getKey(c);
+    do {
+        _currentRecord = _cursor.next();
+        log() << "Found record...";
+    // Check if sequence portion (low 32 bits) is greater than 0 to make sure
+    // _currentRecord doesn't refer to a schema
+    } while(_currentRecord && static_cast<uint32_t>(_currentRecord->id.repr()) == 0);
+    log() << "Returning record with id " << _currentRecord->id.repr() << "("
+          << std::bitset<64>(_currentRecord->id.repr()).to_string() << ")" << std::endl;
+    // if (!_currentRecord)
+    //     return _currentRecord;
 
-    if (id.repr() > 4) {
-        return {};
-    }
+    // WT_CURSOR* c = _cursor._cursor->get();
+    // RecordId id = _cursor.getKey(c);
+
+    // if (id.repr() > 4) {
+    //     return {};
+    // }
 
     return _currentRecord;
 }
