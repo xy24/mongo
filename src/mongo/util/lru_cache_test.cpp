@@ -31,9 +31,9 @@
 #include <fstream>
 #include <iostream>
 #include <type_traits>
+#include <unordered_set>
 #include <utility>
 #include <vector>
-#include <unordered_set>
 
 #include "mongo/platform/random.h"
 #include "mongo/stdx/type_traits.h"
@@ -619,12 +619,12 @@ TEST(LRUCacheTest, HitRateTest) {
         int misses = 0;
         for (auto item : sample) {
             if (seen.count(item)) {
-            auto it = cache.find(item);
-            if (it == cache.end()) {
-                cache.add(item, true);
-                misses++;
-            } }
-            else {
+                auto it = cache.find(item);
+                if (it == cache.end()) {
+                    cache.add(item, true);
+                    misses++;
+                }
+            } else {
                 misses++;
                 seen.insert(item);
             }
@@ -633,7 +633,8 @@ TEST(LRUCacheTest, HitRateTest) {
                         << " misses: " << ((sample.size() - misses) * 100 / sample.size())
                         << "% hit rate";
         invariant(misses <= lastMisses);
-        if (misses == lastMisses || misses == 0) break;
+        if (misses == lastMisses || misses == 0)
+            break;
         lastMisses = misses;
     }
 }

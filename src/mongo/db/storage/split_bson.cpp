@@ -273,7 +273,7 @@ public:
                     invariant(f_ptr + fixedSize <= f_end);
                     const int varSize =
                         _vb.buf() + ConstDataView(f_ptr).read<LittleEndian<int>>() - v_ptr;
-                    builder->appendBuf(f_ptr, fixedSize);
+                    builder->appendNum(endian::nativeToLittle(varSize));
 
                     // Append actual string (which includes its terminating null character).
                     invariant(v_ptr + varSize <= v_end);
@@ -369,9 +369,9 @@ int splitBSON(int argc, const char* argv[]) {
             SplitBSONBuilder builder;
             builder.appendElements(obj);
             BSONObj splitObj = builder.obj();
-            uassert(ErrorCodes::BadValue,
-                    str::stream() << obj << " != " << splitObj,
-                    obj.objsize() == splitObj.objsize());
+            invariant(obj.objsize() == splitObj.objsize());
+            invariant(!memcmp(obj.objdata(), splitObj.objdata(), obj.objsize()));
+
             auto hash = builder.hash();
             schemas.push_back(hash);
             {
@@ -410,6 +410,7 @@ int splitBSON(int argc, const char* argv[]) {
 
         log() << filename << " has " << docs << " docs, " << occurrences << " of which have "
               << fieldname << " starting with " << key;
+        log() << filename << " has " << schemaCount.size() << " different schemas";
         log() << filename << " has " << runs
               << " cases where the schema is unchanged in sequential docs";
         log() << filename << " had " << misses << " misses in cache of size " << cache.size()
