@@ -29,6 +29,7 @@
 
 #include <fstream>
 
+#include "mongo/base/data_view.h"
 #include "mongo/base/string_data.h"
 #include "mongo/bson/bsonelement.h"
 #include "mongo/bson/bsonobj.h"
@@ -126,6 +127,34 @@ private:
     const char* _data;
 };
 
+class SplitBSON {
+public:
+    SplitBSON(SharedBuffer schema, const char* data) : _ownedSchema(schema), _data(data) {}
+    SplitBSON(SharedBuffer schema, SharedBuffer data)
+        : _ownedSchema(schema), _data(data.get()), _ownedData(data) {}
+    BSONObj obj() {
+        BufBuilder builder;
+        toBSON(&builder);
+        BSONObj out = BSONObj(builder.buf());
+        out.shareOwnershipWith(builder.release());
+        return out;
+    }
+    void toBSON(BufBuilder* builder, int s_ofs = 0, int f_ofs = 0, int v_ofs = 0);
+
+    int schemaSize() {
+        return ConstDataView(schema()).read<LittleEndian<int>>();
+    }
+
+    const char* schema() {
+        return _ownedSchema.get();
+    }
+
+private:
+    SharedBuffer _ownedSchema;
+    const char* _data;
+    SharedBuffer _ownedData;
+};
+
 class SplitBSONBuilder {
 public:
     SplitBSONBuilder(int initSchemaSize = 512, int initFixedSize = 512, int initVarSize = 0)
@@ -165,21 +194,16 @@ public:
         return StringData(_sb.buf(), _sb.len());
     }
 
-    void toBSON(BufBuilder* builder, int s_ofs = 0, int f_ofs = 0, int v_ofs = 0);
-
     int dataSize() {
         return _fb.len() + _vb.len();
     }
 
-    BSONObj obj() {
-        BufBuilder builder;
-        toBSON(&builder);
-        BSONObj out = BSONObj(builder.buf());
-        out.shareOwnershipWith(builder.release());
-        return out;
+    SplitBSON release() {
+        _fb.appendBuf(_vb.buf(), _vb.len());
+        _vb.reset();
+
+        return {_sb.release(), _fb.release() };
     }
-
-
 private:
     void _done() {
         if (_sb.len() && _sb.buf()[_sb.len() - 1] == EOO)
@@ -189,7 +213,6 @@ private:
         DataView(_sb.buf()).write(tagLittleEndian(_sb.len()));
         DataView(_sb.buf() + sizeof(int)).write(tagLittleEndian(_fb.len()));
         DataView(_fb.buf()).write(tagLittleEndian(_vb.len()));
-        // _fb.appendBuf(_vb.buf(), _vb.len());
     }
 
     BufBuilder& _sb;
@@ -201,4 +224,3 @@ private:
 };
 
 }  // namespace mongo
-

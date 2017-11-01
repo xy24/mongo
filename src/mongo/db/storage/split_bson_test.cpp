@@ -94,11 +94,12 @@ int splitBSON(int argc, const char* argv[]) {
             builder.appendElements(obj);
             totalDataSize += obj.objsize();
             totalSplitSize += builder.dataSize();
-            BSONObj splitObj = builder.obj();
+            auto hash = builder.hash();
+            SplitBSON split = builder.release();
+            BSONObj splitObj = split.obj();
             invariant(obj.objsize() == splitObj.objsize());
             invariant(!memcmp(obj.objdata(), splitObj.objdata(), obj.objsize()));
 
-            auto hash = builder.hash();
             schemas.push_back(hash);
             {
                 auto it = cache.find(hash);
@@ -107,10 +108,10 @@ int splitBSON(int argc, const char* argv[]) {
                     cache.add(hash, true);
                 }
             }
-            auto p = schemaCount.try_emplace(builder.schema());
+            auto p = schemaCount.try_emplace(StringData(split.schema(), split.schemaSize()));
             auto it = p.first;
             if (p.second) {
-                totalSchemaSize += builder.schema().size();
+                totalSchemaSize += split.schemaSize();
                 ++(it->second);
             } else {
                 it->second = 1;
