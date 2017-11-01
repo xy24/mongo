@@ -149,6 +149,17 @@ public:
         return _ownedSchema.get();
     }
 
+    const char* data() {
+        return _data;
+    }
+
+    size_t dataSize() {
+        size_t fixedSize = ConstDataView(schema() + sizeof(uint32_t)).read<LittleEndian<size_t>>();
+        size_t varSize = ConstDataView(data()).read<LittleEndian<size_t>>();
+
+        return fixedSize + varSize;
+    }
+
 private:
     SharedBuffer _ownedSchema;
     const char* _data;
