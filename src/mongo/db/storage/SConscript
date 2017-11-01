@@ -230,14 +230,22 @@ env.CppUnitTest(
     LIBDEPS_PRIVATE=[],
 )
 
+env.Library(
+    target='split_bson',
+    source='split_bson.cpp',
+    LIBDEPS=[
+            '$BUILD_DIR/mongo/base',
+    ]
+)
+
 env.Install(
     '#/',
     env.Program(
-        target='split_bson',
-        source='split_bson.cpp',
+        target='split_bson_test',
+        source='split_bson_test.cpp',
         LIBDEPS=[
-            '$BUILD_DIR/mongo/base',
-            'BUILD_DIR/mongo/unittest/unittest',
+            'split_bson',
+            '$BUILD_DIR/mongo/unittest/unittest',
         ]
     )
 )
