@@ -1163,7 +1163,14 @@ Status WiredTigerRecordStore::_insertRecords(OperationContext* opCtx,
             // step 2 split bson document
             SplitBSONBuilder splitBuilder;
             splitBuilder.appendElements(data);
-            const uint32_t schemaHash = splitBuilder.hash();
+            uint32_t schemaHash = splitBuilder.hash();
+
+            // The schema hash will eventually be left shifted by 32 bits to create a recordid.
+            // it seems like we don't allow negative record ids, so we just force the MSB
+            // of the schemaHash to be 0, so the sign bit of the record id is always 0.
+            // FIXME: this is a hack and someone should think through a better way of doing it
+            schemaHash &= ~(1 << 31);
+
             // step 3 insert schema
             {
                 RecordData data(splitBuilder.schema().rawData(), splitBuilder.schema().size());
@@ -2114,14 +2121,16 @@ boost::optional<Record> WiredTigerRecordStoreSchemaCursor::next() {
     _currentRecord = _cursor.next();
 
     // FIXME: this only supports forward scanning
-    invariant(_forward);
+    // We can't have the below line though, since WT will do a reverse scan
+    // on initialization to get the highest record id.
+    // invariant(_forward);
 
     while (_currentRecord) {
         // Check if sequence portion (low 32 bits) is greater than 0 to make sure
         // _currentRecord doesn't refer to a schema
         if (_currentRecord && static_cast<uint32_t>(_currentRecord->id.repr()) == 0) {
             // It's a schema.
-            _currentSchema = _currentRecord.data;
+            _currentSchema = _currentRecord->data;
             _currentSchema->makeOwned();
             log() << "Reading schema";
         } else {
@@ -2131,17 +2140,14 @@ boost::optional<Record> WiredTigerRecordStoreSchemaCursor::next() {
 
         _currentRecord = _cursor.next();
     }
+
+    if (!_currentRecord) {
+        // Ran out of documents
+        return {};
+    }
+
     log() << "Returning record with id " << _currentRecord->id.repr() << "("
           << std::bitset<64>(_currentRecord->id.repr()).to_string() << ")" << std::endl;
-    // if (!_currentRecord)
-    //     return _currentRecord;
-
-    // WT_CURSOR* c = _cursor._cursor->get();
-    // RecordId id = _cursor.getKey(c);
-
-    // if (id.repr() > 4) {
-    //     return {};
-    // }
 
     return _currentRecord;
 }
