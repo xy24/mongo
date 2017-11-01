@@ -204,6 +204,10 @@ public:
 
         return {_sb.release(), _fb.release() };
     }
+
+    StringData dataPortion() {
+        return StringData(_fb.buf(), _fb.len());
+    }
 private:
     void _done() {
         if (_sb.len() && _sb.buf()[_sb.len() - 1] == EOO)

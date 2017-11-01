@@ -516,6 +516,7 @@ private:
     WiredTigerRecordStoreStandardCursor _cursor;
     std::vector<std::string> _fields;
     boost::optional<Record> _currentRecord;
+    boost::optional<RecordData> _currentSchema;
 };
 
 // WT failpoint to throw write conflict exceptions randomly

@@ -2111,13 +2111,26 @@ WiredTigerRecordStoreSchemaCursor::WiredTigerRecordStoreSchemaCursor(
     : _cursor(opCtx, rs, forward), _fields(fields) {}
 
 boost::optional<Record> WiredTigerRecordStoreSchemaCursor::next() {
+    _currentRecord = _cursor.next();
 
-    do {
+    // FIXME: this only supports forward scanning
+    invariant(_forward);
+
+    while (_currentRecord) {
+        // Check if sequence portion (low 32 bits) is greater than 0 to make sure
+        // _currentRecord doesn't refer to a schema
+        if (_currentRecord && static_cast<uint32_t>(_currentRecord->id.repr()) == 0) {
+            // It's a schema.
+            _currentSchema = _currentRecord.data;
+            _currentSchema->makeOwned();
+            log() << "Reading schema";
+        } else {
+            // It's a document.
+            break;
+        }
+
         _currentRecord = _cursor.next();
-        log() << "Found record...";
-    // Check if sequence portion (low 32 bits) is greater than 0 to make sure
-    // _currentRecord doesn't refer to a schema
-    } while(_currentRecord && static_cast<uint32_t>(_currentRecord->id.repr()) == 0);
+    }
     log() << "Returning record with id " << _currentRecord->id.repr() << "("
           << std::bitset<64>(_currentRecord->id.repr()).to_string() << ")" << std::endl;
     // if (!_currentRecord)
