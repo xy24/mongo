@@ -682,6 +682,8 @@ WiredTigerRecordStore::~WiredTigerRecordStore() {
 
 void WiredTigerRecordStore::postConstructorInit(OperationContext* opCtx) {
     // Find the largest RecordId currently in use and estimate the number of records.
+
+    // FIXME: This whole function is probably broken for the schema cursor.
     std::unique_ptr<SeekableRecordCursor> cursor = getCursor(opCtx, /*forward=*/false);
     if (auto record = cursor->next()) {
         int64_t max = record->id.repr();
@@ -1164,7 +1166,6 @@ Status WiredTigerRecordStore::_insertRecords(OperationContext* opCtx,
             SplitBSONBuilder splitBuilder;
             splitBuilder.appendElements(data);
             uint32_t schemaHash = splitBuilder.hash();
-
             // The schema hash will eventually be left shifted by 32 bits to create a recordid.
             // it seems like we don't allow negative record ids, so we just force the MSB
             // of the schemaHash to be 0, so the sign bit of the record id is always 0.
@@ -1198,8 +1199,8 @@ Status WiredTigerRecordStore::_insertRecords(OperationContext* opCtx,
                 // schema Id. We're just going to use the global counter since we'll only insert a
                 // handful of documents
                 // FIXME: for now store the bson object as the value
-                RecordData data(record.data.data(), record.data.size());
-                //RecordData data(splitBuilder.dataPortion().rawData(), splitBuilder.dataPortion().size());
+                //RecordData data(record.data.data(), record.data.size());
+                RecordData data(splitBuilder.dataPortion().rawData(), splitBuilder.dataPortion().size());
                 // FIXME: Here we use record.id, but to be safe we should really use an internal counter.
                 invariant(record.id.isNormal());
                 RecordId id(schemaHash, static_cast<uint32_t>(record.id.repr()));
@@ -2124,7 +2125,6 @@ boost::optional<Record> WiredTigerRecordStoreSchemaCursor::next() {
     // We can't have the below line though, since WT will do a reverse scan
     // on initialization to get the highest record id.
     // invariant(_forward);
-
     while (_currentRecord) {
         // Check if sequence portion (low 32 bits) is greater than 0 to make sure
         // _currentRecord doesn't refer to a schema
@@ -2135,6 +2135,9 @@ boost::optional<Record> WiredTigerRecordStoreSchemaCursor::next() {
             log() << "Reading schema";
         } else {
             // It's a document.
+
+            // If we're moving forward we should never have a document without a current schema.
+            invariant(!_cursor._forward || _currentSchema);
             break;
         }
 
@@ -2149,7 +2152,29 @@ boost::optional<Record> WiredTigerRecordStoreSchemaCursor::next() {
     log() << "Returning record with id " << _currentRecord->id.repr() << "("
           << std::bitset<64>(_currentRecord->id.repr()).to_string() << ")" << std::endl;
 
-    return _currentRecord;
+    // return _currentRecord;
+
+    // Now we recombine the document.
+    invariant(!_cursor._forward || _currentSchema);
+    if (!_cursor._forward) {
+        // We don't have the schema, so we shouldn't try to rebuild anything.
+        // Just return here and hope the caller doesn't try to do anything with the
+        // RecordData
+        return _currentRecord;
+    }
+    BSONObj obj = SplitBSONBuilder::recombine(_currentSchema->data(), _currentSchema->size(),
+                                              _currentRecord->data.data(),
+                                              _currentRecord->data.size());
+    log() << "Recombined BSONObj " << obj;
+
+    RecordData recData(obj.objdata(), obj.objsize());
+
+    // FIXME: Maybe better to return a RecordData that has a data member
+    // pointing to something like _currentObj (which we could make) rather than
+    // calling getOwned().
+    Record ret = {_currentRecord->id, recData.getOwned()};
+
+    return ret;
 }
 
 void WiredTigerRecordStoreSchemaCursor::save() {
