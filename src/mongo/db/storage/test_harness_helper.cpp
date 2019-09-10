@@ -34,6 +34,7 @@
 
 #include "mongo/util/assert_util.h"
 
+// TODO: remove all these, users should use subclasses of harness helper.
 namespace mongo {
 namespace {
 std::function<std::unique_ptr<HarnessHelper>()> basicHarnessFactory;
@@ -42,10 +43,12 @@ std::function<std::unique_ptr<HarnessHelper>()> basicHarnessFactory;
 HarnessHelper::HarnessHelper() : _threadClient(getGlobalServiceContext()) {}
 
 void registerHarnessHelperFactory(std::function<std::unique_ptr<HarnessHelper>()> factory) {
+    std::cout << "yxy: should not use this\n";
     basicHarnessFactory = std::move(factory);
 }
 
 auto newHarnessHelper() -> std::unique_ptr<HarnessHelper> {
+    std::cout << "yxy: should not use this\n";
     return basicHarnessFactory();
 }
 

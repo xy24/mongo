@@ -47,6 +47,7 @@ namespace mongo {
 /**
  * Sets up an OperationContext with a Recovery Unit. Uses a ServiceContextNoop.
  *
+ * TODO: change the comment here
  * A particular HarnessHelper implementation will implement registerHarnessHelperFactory() and
  * newHarnessHelper() such that generic unit tests can create and test that particular
  * HarnessHelper implementation. The newRecoveryUnit() implementation dictates what RecoveryUnit
@@ -94,6 +95,7 @@ std::unique_ptr<Target> noexcept_ptr_conversion(std::unique_ptr<Current>&& p, Ta
 }
 }  // namespace harness_helper_detail
 
+// TODO: remove this
 extern void registerHarnessHelperFactory(std::function<std::unique_ptr<HarnessHelper>()> factory);
 
 template <typename Target, typename Current>
